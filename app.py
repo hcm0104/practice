@@ -9,7 +9,7 @@ st.title("🌍 환경 정책 실효성 분석 대시보드")
 st.markdown("자가용 이용률 → NOx → 폐질환 구조를 시각적으로 확인합니다.")
 
 # ---------------------------
-# 1. 가상 데이터 생성
+# 1. 데이터 생성
 # ---------------------------
 @st.cache_data
 def load_data():
@@ -22,13 +22,8 @@ def load_data():
         "Pop_Density": np.random.uniform(2000, 15000, n),
     })
 
-    # NOx: 자가용 + 인구밀도 영향
     data["NOx"] = 0.02 * data["Car_Usage"] + 0.0005 * data["Pop_Density"] + np.random.normal(0, 0.5, n)
-
-    # SOx: 랜덤 + 약한 영향
     data["SOx"] = np.random.uniform(0.01, 0.05, n)
-
-    # 폐질환: NOx 영향 (핵심 구조)
     data["Lung_Disease"] = 18 * data["NOx"] + np.random.normal(0, 5, n)
 
     return data
@@ -36,7 +31,7 @@ def load_data():
 df = load_data()
 
 # ---------------------------
-# 2. 사이드바 (정책 시뮬레이션)
+# 2. 정책 선택
 # ---------------------------
 st.sidebar.header("📊 정책 시나리오")
 
@@ -57,7 +52,7 @@ elif policy == "통합 정책":
     df_sim["Car_Usage"] *= 0.85
     df_sim["NOx"] *= 0.7
 
-# 정책 반영 후 재계산
+# 재계산
 df_sim["NOx"] = 0.02 * df_sim["Car_Usage"] + 0.0005 * df_sim["Pop_Density"]
 df_sim["Lung_Disease"] = 18 * df_sim["NOx"]
 
@@ -79,45 +74,89 @@ fig1 = px.scatter(
     df_sim,
     x="NOx",
     y="Lung_Disease",
-    trendline="ols",
-    title="NOx 증가 → 폐질환 증가"
+    trendline="ols"
 )
 st.plotly_chart(fig1, use_container_width=True)
 
-# ---------------------------
-# 5. 매개효과 구조 시각화
-# ---------------------------
-st.subheader("🔗 구조적 관계")
+st.subheader("🔗 자가용 이용률 → NOx")
 
 fig2 = px.scatter(
     df_sim,
     x="Car_Usage",
     y="NOx",
-    trendline="ols",
-    title="자가용 이용률 → NOx 증가"
+    trendline="ols"
 )
 st.plotly_chart(fig2, use_container_width=True)
 
 # ---------------------------
-# 6. 정책 효과 비교
+# 5. 📊 전체 데이터 테이블
 # ---------------------------
-st.subheader("📊 정책 효과 비교")
+st.subheader("📋 지역별 데이터")
 
-baseline = df["Lung_Disease"].mean()
-after = df_sim["Lung_Disease"].mean()
-
-st.write(f"정책 전 폐질환 지수: {baseline:.2f}")
-st.write(f"정책 후 폐질환 지수: {after:.2f}")
-st.write(f"감소율: {(baseline - after)/baseline * 100:.2f}%")
+st.dataframe(
+    df_sim.sort_values("Lung_Disease", ascending=False),
+    use_container_width=True
+)
 
 # ---------------------------
-# 7. 해석
+# 6. 📊 요약 통계 테이블
+# ---------------------------
+st.subheader("📊 요약 통계")
+
+summary_table = df_sim[["Car_Usage", "NOx", "SOx", "Lung_Disease"]].describe().T
+summary_table["range"] = summary_table["max"] - summary_table["min"]
+
+st.dataframe(summary_table, use_container_width=True)
+
+# ---------------------------
+# 7. 📊 정책 효과 비교 테이블
+# ---------------------------
+st.subheader("📉 정책 효과 비교")
+
+def simulate_policy(base_df, policy_name):
+    temp = base_df.copy()
+
+    if policy_name == "대중교통 인센티브":
+        temp["Car_Usage"] *= 0.9
+    elif policy_name == "저배출구역(LEZ)":
+        temp["NOx"] *= 0.8
+    elif policy_name == "통합 정책":
+        temp["Car_Usage"] *= 0.85
+        temp["NOx"] *= 0.7
+
+    temp["NOx"] = 0.02 * temp["Car_Usage"] + 0.0005 * temp["Pop_Density"]
+    temp["Lung_Disease"] = 18 * temp["NOx"]
+
+    return temp
+
+policies = ["기본 상태", "대중교통 인센티브", "저배출구역(LEZ)", "통합 정책"]
+
+results = []
+
+for p in policies:
+    sim = simulate_policy(df, p)
+    results.append({
+        "정책": p,
+        "평균 NOx": sim["NOx"].mean(),
+        "평균 폐질환": sim["Lung_Disease"].mean()
+    })
+
+policy_df = pd.DataFrame(results)
+
+# 감소율 계산
+baseline = policy_df.loc[policy_df["정책"] == "기본 상태", "평균 폐질환"].values[0]
+policy_df["감소율(%)"] = (baseline - policy_df["평균 폐질환"]) / baseline * 100
+
+st.dataframe(policy_df, use_container_width=True)
+
+# ---------------------------
+# 8. 해석
 # ---------------------------
 st.subheader("🧠 해석")
 
 st.markdown(f"""
-- 현재 선택된 정책: **{policy}**
-- 본 모델은 **자가용 → NOx → 폐질환**의 매개 구조를 반영합니다.
-- 특히 NOx가 건강 영향의 핵심 변수입니다.
-- 따라서 교통 정책이 곧 보건 정책으로 연결됩니다.
+- 선택된 정책: **{policy}**
+- NOx 감소가 폐질환 감소로 직접 연결됨
+- 통합 정책이 가장 높은 효과를 보이는 구조
+- 교통 정책이 보건 개선의 핵심 레버리지
 """)
