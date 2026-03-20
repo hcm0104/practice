@@ -43,19 +43,18 @@ BASE_DIR = Path(__file__).parent
 def find_csv(name_underscore: str) -> Path:
     name_space = name_underscore.replace("_", " ")
     for name in [name_underscore, name_space]:
-        for directory in [BASE_DIR, BASE_DIR / "data"]:
-            p = directory / name
+        for d in [BASE_DIR, BASE_DIR / "data"]:
+            p = d / name
             if p.exists():
                 return p
     return None
-
 
 INFO_CSV = find_csv("서울시_공영주차장_안내_정보.csv")
 RT_CSV   = find_csv("서울시_시영주차장_실시간_주차대수_정보.csv")
 
 
 # ─────────────────────────────────────────
-# 서울 25개 구 중심 좌표
+# 서울 25개 구 중심 좌표 (지도용)
 # ─────────────────────────────────────────
 GU_COORDS = {
     "종로구":(37.5909,126.9718), "중구":(37.5636,126.9975), "용산구":(37.5326,126.9902),
@@ -68,24 +67,6 @@ GU_COORDS = {
     "서초구":(37.4837,127.0324), "강남구":(37.5172,127.0473), "송파구":(37.5145,127.1059),
     "강동구":(37.5301,127.1238),
 }
-
-
-# ─────────────────────────────────────────
-# 혼잡도 색상
-# ─────────────────────────────────────────
-STATUS_COLOR = {"여유": "#2ecc71", "보통": "#3498db", "혼잡": "#f39c12", "만차": "#e74c3c"}
-
-def get_congestion_color(rate: float) -> str:
-    if rate >= 95: return "#e74c3c"
-    elif rate >= 70: return "#f39c12"
-    elif rate >= 30: return "#3498db"
-    else: return "#2ecc71"
-
-def get_congestion_label(rate: float) -> str:
-    if rate >= 95: return "만차"
-    elif rate >= 70: return "혼잡"
-    elif rate >= 30: return "보통"
-    else: return "여유"
 
 
 # ─────────────────────────────────────────
@@ -162,12 +143,29 @@ info, rt, gu_rt, gu_info = load_data()
 
 GU_LIST      = sorted(info["구"].dropna().unique().tolist())
 UPDATE_TIME  = rt["현재 주차 차량수 업데이트시간"].iloc[0] if len(rt) > 0 else "-"
+STATUS_COLOR = {"여유": "#2ecc71", "보통": "#3498db", "혼잡": "#f39c12", "만차": "#e74c3c"}
 PLOT_BASE    = dict(
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(255,255,255,0.9)",
     font=dict(family="Noto Sans KR, sans-serif", size=12, color="#4a5568"),
     margin=dict(l=10, r=10, t=36, b=10),
 )
+
+
+# ─────────────────────────────────────────
+# 혼잡도 색상 헬퍼
+# ─────────────────────────────────────────
+def cong_color(rate):
+    if rate >= 95: return "#e74c3c"
+    elif rate >= 70: return "#f39c12"
+    elif rate >= 30: return "#3498db"
+    else: return "#2ecc71"
+
+def cong_label(rate):
+    if rate >= 95: return "만차"
+    elif rate >= 70: return "혼잡"
+    elif rate >= 30: return "보통"
+    else: return "여유"
 
 
 # ─────────────────────────────────────────
@@ -200,7 +198,7 @@ def filt(df):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ① 전체 현황  (원본 그대로)
+# ① 전체 현황  ── 원본 그대로
 # ─────────────────────────────────────────────────────────────────────────────
 if "전체 현황" in view:
     st.markdown('<div class="page-title">📊 서울시 공영주차장 전체 현황</div>', unsafe_allow_html=True)
@@ -308,7 +306,7 @@ if "전체 현황" in view:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ② 구별 현황  (원본 테이블·차트 유지 + 지도 추가)
+# ② 구별 현황  ── 원본 + 지도 추가
 # ─────────────────────────────────────────────────────────────────────────────
 elif "구별 현황" in view:
     st.markdown('<div class="page-title">🗺️ 자치구별 주차 현황</div>', unsafe_allow_html=True)
@@ -323,50 +321,36 @@ elif "구별 현황" in view:
         merged = merged[merged["구"].isin(sel_gu)]
     merged = merged.sort_values("전체주차장수", ascending=False)
 
-    # ── 지도 + 우측 테이블 ─────────────────────────────────────────────────────
+    # ── 지도 + 혼잡도 순위 카드 ──────────────────────────────────────────────
     st.markdown("#### 🗺️ 구별 혼잡도 지도")
     st.caption("마커를 클릭하면 해당 구의 상세 정보를 볼 수 있습니다.")
 
-    map_col, info_col = st.columns([3, 2], gap="medium")
+    map_col, rank_col = st.columns([3, 2], gap="medium")
 
     with map_col:
-        # Folium 지도 생성
-        m = folium.Map(
-            location=[37.5665, 126.9780],
-            zoom_start=11,
-            tiles=None,
-        )
-        # 밝은 카토 타일 (원본 앱 밝은 테마와 어울리도록)
+        m = folium.Map(location=[37.5665, 126.9780], zoom_start=11, tiles=None)
         folium.TileLayer(
             tiles="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-            attr="CartoDB",
-            max_zoom=19,
+            attr="CartoDB", max_zoom=19,
         ).add_to(m)
 
-        # 구별 버블 마커
         map_data = gu_rt[gu_rt["구"].isin(sel_gu)] if sel_gu else gu_rt.copy()
 
         for _, row in map_data.iterrows():
-            rate   = float(row["이용률"])
-            color  = get_congestion_color(rate)
-            label  = get_congestion_label(rate)
-            avail  = int(row["가용면"])
-            size   = max(28, min(65, float(row["총주차면"]) * 0.034))
+            rate  = float(row["이용률"])
+            color = cong_color(rate)
+            label = cong_label(rate)
+            size  = max(28, min(65, float(row["총주차면"]) * 0.034))
 
-            # 버블 아이콘
             bubble_html = f"""
-            <div style="
-                width:{size:.0f}px; height:{size:.0f}px; border-radius:50%;
-                background:{color}; border:3px solid white;
+            <div style="width:{size:.0f}px;height:{size:.0f}px;border-radius:50%;
+                background:{color};border:3px solid white;
                 box-shadow:0 3px 10px rgba(0,0,0,0.2);
-                display:flex; flex-direction:column;
-                align-items:center; justify-content:center;
-            ">
+                display:flex;flex-direction:column;align-items:center;justify-content:center;">
               <span style="font-size:{max(9,size*0.24):.0f}px;font-weight:800;color:white;line-height:1.1;">{rate:.0f}%</span>
               <span style="font-size:{max(7,size*0.17):.0f}px;font-weight:600;color:rgba(255,255,255,.9);line-height:1.1;">{row['구'][:2]}</span>
             </div>"""
 
-            # 팝업
             popup_html = f"""
             <div style="font-family:'Noto Sans KR',sans-serif;min-width:190px;padding:6px 2px;">
               <div style="font-size:15px;font-weight:700;color:#1b2a4a;margin-bottom:8px;">{row['구']}</div>
@@ -390,7 +374,7 @@ elif "구별 현황" in view:
                 </tr>
                 <tr>
                   <td style="padding:4px 0;">잔여 면수</td>
-                  <td style="text-align:right;font-weight:700;color:{color};">{avail:,}면</td>
+                  <td style="text-align:right;font-weight:700;color:{color};">{int(row['가용면']):,}면</td>
                 </tr>
               </table>
             </div>"""
@@ -406,54 +390,44 @@ elif "구별 현황" in view:
                 tooltip=f"{row['구']} — {rate:.1f}% ({label})",
             ).add_to(m)
 
-        # 범례
         legend_html = """
-        <div style="
-            position:fixed; bottom:20px; left:20px; z-index:9999;
-            background:white; border:1px solid #dde3ec; border-radius:12px;
-            padding:12px 14px; box-shadow:0 2px 10px rgba(0,0,0,.1);
-            font-family:'Noto Sans KR',sans-serif;
-        ">
+        <div style="position:fixed;bottom:20px;left:20px;z-index:9999;
+            background:white;border:1px solid #dde3ec;border-radius:12px;
+            padding:12px 14px;box-shadow:0 2px 10px rgba(0,0,0,.1);font-family:'Noto Sans KR',sans-serif;">
           <div style="font-size:11px;font-weight:700;color:#1b2a4a;margin-bottom:8px;">혼잡도 기준</div>
           <div style="font-size:12px;color:#6b7a99;line-height:2;">
-            <span style="color:#2ecc71;font-weight:700;">●</span> 여유 &nbsp;(~30%)<br>
-            <span style="color:#3498db;font-weight:700;">●</span> 보통 &nbsp;(30–70%)<br>
-            <span style="color:#f39c12;font-weight:700;">●</span> 혼잡 &nbsp;(70–95%)<br>
-            <span style="color:#e74c3c;font-weight:700;">●</span> 만차 &nbsp;(95%+)
+            <span style="color:#2ecc71;font-weight:700;">●</span> 여유 (~30%)<br>
+            <span style="color:#3498db;font-weight:700;">●</span> 보통 (30–70%)<br>
+            <span style="color:#f39c12;font-weight:700;">●</span> 혼잡 (70–95%)<br>
+            <span style="color:#e74c3c;font-weight:700;">●</span> 만차 (95%+)
           </div>
           <div style="margin-top:7px;font-size:10px;color:#b0bac9;">버블 크기 = 총 주차면 비례</div>
         </div>"""
         m.get_root().html.add_child(folium.Element(legend_html))
-
         MiniMap(toggle_display=True, zoom_level_offset=-5).add_to(m)
 
         st_folium(m, use_container_width=True, height=500, returned_objects=[])
 
-    with info_col:
-        # 혼잡도 순위 카드
+    with rank_col:
         st.markdown("#### 구별 혼잡도 순위")
-        rank_df = map_data.sort_values("이용률", ascending=False)
-        for i, (_, row) in enumerate(rank_df.iterrows(), 1):
+        for i, (_, row) in enumerate(map_data.sort_values("이용률", ascending=False).iterrows(), 1):
             rate  = float(row["이용률"])
-            color = get_congestion_color(rate)
-            label = get_congestion_label(rate)
-            bar_w = min(rate, 100)
+            color = cong_color(rate)
+            label = cong_label(rate)
             st.markdown(f"""
-            <div style="background:white;border-radius:10px;padding:10px 14px;
-                        margin-bottom:7px;box-shadow:0 1px 4px rgba(0,0,0,.06);
-                        border-left:4px solid {color};">
+            <div style="background:white;border-radius:10px;padding:10px 14px;margin-bottom:7px;
+                        box-shadow:0 1px 4px rgba(0,0,0,.06);border-left:4px solid {color};">
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
                 <div>
                   <span style="font-size:11px;color:#8a94a6;margin-right:6px;">#{i:02d}</span>
                   <span style="font-size:14px;font-weight:700;color:#1b2a4a;">{row['구']}</span>
-                  <span style="display:inline-block;background:{color};color:white;
-                               font-size:10px;font-weight:700;padding:1px 7px;
-                               border-radius:999px;margin-left:6px;">{label}</span>
+                  <span style="display:inline-block;background:{color};color:white;font-size:10px;
+                               font-weight:700;padding:1px 7px;border-radius:999px;margin-left:6px;">{label}</span>
                 </div>
                 <span style="font-size:16px;font-weight:800;color:{color};">{rate:.1f}%</span>
               </div>
               <div style="height:5px;background:#f0f4f8;border-radius:3px;overflow:hidden;">
-                <div style="height:5px;background:{color};border-radius:3px;width:{bar_w:.1f}%;"></div>
+                <div style="height:5px;background:{color};border-radius:3px;width:{min(rate,100):.1f}%;"></div>
               </div>
               <div style="display:flex;justify-content:space-between;margin-top:5px;font-size:11px;color:#8a94a6;">
                 <span>{int(row['주차장수'])}개소 · {int(row['총주차면']):,}면</span>
@@ -463,11 +437,9 @@ elif "구별 현황" in view:
 
     st.markdown("---")
 
-    # ── 원본 테이블 ───────────────────────────────────────────────────────────
+    # ── 원본 테이블 ──────────────────────────────────────────────────────────
     st.markdown("#### 구별 종합 현황 테이블")
-    disp = merged[[
-        "구", "전체주차장수", "전체주차면", "주차장수", "총주차면", "현재차량", "가용면", "실시간이용률"
-    ]].copy()
+    disp = merged[["구", "전체주차장수", "전체주차면", "주차장수", "총주차면", "현재차량", "가용면", "실시간이용률"]].copy()
     disp.columns = ["자치구", "전체 주차장", "전체 주차면", "실시간 연계", "연계 주차면", "현재 차량", "가용 면수", "이용률(%)"]
     st.dataframe(
         disp.style
@@ -514,7 +486,7 @@ elif "구별 현황" in view:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ③ 주차장 목록  (원본 그대로)
+# ③ 주차장 목록  ── 원본 그대로
 # ─────────────────────────────────────────────────────────────────────────────
 elif "주차장 목록" in view:
     st.markdown('<div class="page-title">📋 주차장 목록 조회</div>', unsafe_allow_html=True)
