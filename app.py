@@ -4,46 +4,53 @@ import requests
 import pydeck as pdk
 import xml.etree.ElementTree as ET
 
-st.set_page_config(page_title="서울 주차장 지도", layout="wide")
+st.set_page_config(page_title="서울 주차장 실시간 지도", layout="wide")
 
 st.title("🚗 서울 시영주차장 실시간 현황")
 
 # -------------------------
-# 🔑 API KEY
+# 🔑 API KEY (sample 기본)
 # -------------------------
 API_KEY = st.secrets.get("SEOUL_API_KEY", "sample")
 
 # -------------------------
-# 📡 데이터 로드 (XML 전용)
+# 📡 데이터 로드 (완전 안정화)
 # -------------------------
 @st.cache_data(ttl=300)
 def load_data():
-    url = f"http://openapi.seoul.go.kr:8088/{API_KEY}/xml/GetParkingInfo/1/100"
+    url = f"http://openapi.seoul.go.kr:8088/{API_KEY}/xml/GetParkingInfo/1/5"
 
     try:
         response = requests.get(url, timeout=10)
 
         if response.status_code != 200:
-            st.error(f"API 요청 실패: {response.status_code}")
+            st.error(f"❌ API 요청 실패: {response.status_code}")
             return pd.DataFrame()
+
+        # 🔥 응답 확인 (디버깅)
+        st.subheader("🔍 API 응답 (디버깅)")
+        st.text(response.text[:1000])
 
         root = ET.fromstring(response.text)
 
-        rows = []
-        for row in root.findall(".//row"):
+        rows = root.findall(".//row")
+
+        # ❗ 데이터 없는 경우 처리
+        if not rows:
+            st.warning("⚠️ 데이터 없음 (API 응답 확인 필요)")
+            return pd.DataFrame()
+
+        data_list = []
+        for row in rows:
             item = {}
             for child in row:
                 item[child.tag] = child.text
-            rows.append(item)
+            data_list.append(item)
 
-        df = pd.DataFrame(rows)
-
-        if df.empty:
-            st.warning("데이터 없음")
-            return df
+        df = pd.DataFrame(data_list)
 
         # -------------------------
-        # 컬럼 정리 (유연 대응)
+        # 컬럼 매핑 (유연 대응)
         # -------------------------
         col_map = {
             "PARKING_NAME": "주차장명",
@@ -80,7 +87,7 @@ def load_data():
         return df
 
     except Exception as e:
-        st.error(f"에러 발생: {e}")
+        st.error(f"❌ 에러 발생: {e}")
         return pd.DataFrame()
 
 
