@@ -1,12 +1,10 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import requests
 import plotly.graph_objects as go
 import folium
 from folium.plugins import MiniMap
 from streamlit_folium import st_folium
-from datetime import datetime
 from pathlib import Path
 
 # ─────────────────────────────────────────
@@ -35,6 +33,25 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
 .kpi-sub    { font-size:12px; color:#8a94a6; margin-top:4px; }
 </style>
 """, unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────
+# CSV 경로 탐색
+# ─────────────────────────────────────────
+BASE_DIR = Path(__file__).parent
+
+def find_csv(name_underscore: str) -> Path:
+    name_space = name_underscore.replace("_", " ")
+    for name in [name_underscore, name_space]:
+        for directory in [BASE_DIR, BASE_DIR / "data"]:
+            p = directory / name
+            if p.exists():
+                return p
+    return None
+
+
+INFO_CSV = find_csv("서울시_공영주차장_안내_정보.csv")
+RT_CSV   = find_csv("서울시_시영주차장_실시간_주차대수_정보.csv")
 
 
 # ─────────────────────────────────────────
@@ -72,103 +89,45 @@ def get_congestion_label(rate: float) -> str:
 
 
 # ─────────────────────────────────────────
-# API 호출 (서울 열린데이터광장 GetParkInfo)
+# 데이터 로드
 # ─────────────────────────────────────────
-def fetch_parking_api(api_key: str) -> list:
-    """전체 페이지 순회하여 공영주차장 데이터 수집"""
-    all_rows = []
-    page_size = 1000
-    for page in range(1, 7):           # 최대 6,000건
-        start = (page - 1) * page_size + 1
-        end   = page * page_size
-        url   = f"http://openapi.seoul.go.kr:8088/{api_key}/json/GetParkInfo/{start}/{end}/"
-        try:
-            resp = requests.get(url, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
-            rows = data.get("GetParkInfo", {}).get("row", [])
-            if not rows:
-                break
-            all_rows.extend(rows)
-            if len(rows) < page_size:  # 마지막 페이지
-                break
-        except Exception:
-            break
-    return all_rows
+@st.cache_data
+def load_data():
+    if INFO_CSV is None:
+        st.error(
+            "**CSV 파일을 찾을 수 없습니다.**\n\n"
+            "아래 두 파일을 `app.py`와 **같은 폴더**에 넣어주세요.\n\n"
+            "- `서울시 공영주차장 안내 정보.csv`\n"
+            "- `서울시 시영주차장 실시간 주차대수 정보.csv`\n\n"
+            f"현재 탐색 경로: `{BASE_DIR}`"
+        )
+        st.stop()
+    if RT_CSV is None:
+        st.error(
+            "**CSV 파일을 찾을 수 없습니다.**\n\n"
+            "`서울시 시영주차장 실시간 주차대수 정보.csv` 파일을 "
+            "`app.py`와 **같은 폴더**에 넣어주세요.\n\n"
+            f"현재 탐색 경로: `{BASE_DIR}`"
+        )
+        st.stop()
 
+    info = pd.read_csv(INFO_CSV, encoding="euc-kr")
+    rt   = pd.read_csv(RT_CSV,   encoding="euc-kr")
 
-@st.cache_data(ttl=300, show_spinner=False)   # 5분 캐시
-def load_data(api_key: str):
-    rows = fetch_parking_api(api_key)
-    if not rows:
-        return None, None, None, None, "-"
+    info["구"] = info["주소"].str.extract(r"([\w]+구)")
+    rt["구"]   = rt["주소"].str.extract(r"([\w]+구)")
 
-    raw = pd.DataFrame(rows)
+    for col in ["총 주차면", "기본 주차 요금", "기본 주차 시간(분 단위)",
+                "추가 단위 요금", "추가 단위 시간(분 단위)",
+                "일 최대 요금", "월 정기권 금액"]:
+        if col in info.columns:
+            info[col] = pd.to_numeric(info[col], errors="coerce").fillna(0)
 
-    # ── 컬럼명 한글 통일 (API 영문 필드 → 한글) ──
-    col_map = {
-        # 주차장 기본 정보
-        "PKLT_CD":              "주차장코드",
-        "PARKING_NAME":         "주차장명",
-        "ADDR":                 "주소",
-        # 종류/운영 (API에 따라 없을 수 있음)
-        "PARKING_TYPE":         "주차장 종류",
-        "PARKING_TYPE_NM":      "주차장 종류명",
-        "OPER_SE":              "운영구분",
-        "OPER_SE_NM":           "운영구분명",
-        # 주차면 수
-        "CAPACITY":             "총 주차면",
-        "PARKING_CNT":          "총 주차면",
-        # 현재 주차 차량수 (여러 필드명 대비)
-        "CUR_PARKING":          "현재 주차 차량수",
-        "CUR_PARKING_CNT":      "현재 주차 차량수",
-        "NOW_PARKING_CNT":      "현재 주차 차량수",
-        "TPKCT":                "현재 주차 차량수",
-        # 유무료
-        "PAY_YN":               "유무료구분",
-        "PAY_YN_NM":            "유무료구분명",
-        # 요금
-        "RATES":                "기본 주차 요금",
-        "TIME_RATE":            "기본 주차 시간(분 단위)",
-        "ADD_RATES":            "추가 단위 요금",
-        "ADD_TIME_RATE":        "추가 단위 시간(분 단위)",
-        "DAY_MAXIMUM":          "일 최대 요금",
-        "MONTHLY_TICKET_GIFT":  "월 정기권 금액",
-        # 위치
-        "LAT":                  "위도",
-        "LNG":                  "경도",
-        "GU_NM":                "구",
-        # 기타
-        "TEL":                  "전화번호",
-        "QUERY_DATE":           "현재 주차 차량수 업데이트시간",
-        "LAST_UPDATE_DATE":     "현재 주차 차량수 업데이트시간",
-    }
-    raw.rename(columns={k: v for k, v in col_map.items() if k in raw.columns}, inplace=True)
+    rt = rt[rt["총 주차면"] > 10].copy()
+    for col in ["기본 주차 요금", "일 최대 요금"]:
+        if col in rt.columns:
+            rt[col] = pd.to_numeric(rt[col], errors="coerce").fillna(0)
 
-    # ── 필수 컬럼 없으면 기본값으로 생성 ──
-    if "주차장코드" not in raw.columns:
-        raw["주차장코드"] = raw.index.astype(str)
-    if "총 주차면" not in raw.columns:
-        raw["총 주차면"] = 0
-    if "현재 주차 차량수" not in raw.columns:
-        raw["현재 주차 차량수"] = 0
-    if "주소" not in raw.columns:
-        raw["주소"] = ""
-
-    raw["구"] = raw["주소"].str.extract(r"([가-힣]+구)")
-
-    # ── 수치 변환 ──
-    for col in ["총 주차면", "현재 주차 차량수", "기본 주차 요금",
-                "기본 주차 시간(분 단위)", "추가 단위 요금", "추가 단위 시간(분 단위)",
-                "일 최대 요금", "월 정기권 금액", "위도", "경도"]:
-        if col in raw.columns:
-            raw[col] = pd.to_numeric(raw[col], errors="coerce").fillna(0)
-
-    # info : 전체 주차장
-    info = raw.copy()
-
-    # rt : 이상치 제거 후 실시간 현황
-    rt = raw[raw["총 주차면"] > 10].copy()
     rt["이용률"] = (rt["현재 주차 차량수"] / rt["총 주차면"] * 100).round(1).clip(0, 100)
     rt["가용면"] = (rt["총 주차면"] - rt["현재 주차 차량수"]).clip(lower=0)
     rt["혼잡도"] = pd.cut(
@@ -177,7 +136,6 @@ def load_data(api_key: str):
         labels=["여유", "보통", "혼잡", "만차"],
     ).astype(str)
 
-    # 구별 실시간 집계
     gu_rt = (
         rt.groupby("구")
         .agg(주차장수=("주차장코드", "count"),
@@ -190,7 +148,6 @@ def load_data(api_key: str):
     gu_rt["lat"]   = gu_rt["구"].map(lambda x: GU_COORDS.get(x, (37.55, 126.98))[0])
     gu_rt["lon"]   = gu_rt["구"].map(lambda x: GU_COORDS.get(x, (37.55, 126.98))[1])
 
-    # 구별 전체 집계
     gu_info = (
         info.groupby("구")
         .agg(전체주차장수=("주차장코드", "count"),
@@ -198,21 +155,13 @@ def load_data(api_key: str):
         .reset_index()
     )
 
-    update_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return info, rt, gu_rt, gu_info, update_time
+    return info, rt, gu_rt, gu_info
 
 
-# ─────────────────────────────────────────
-# API 키 확인 (secrets.toml 또는 사이드바)
-# ─────────────────────────────────────────
-try:
-    _secret_key = st.secrets.get("SEOUL_API_KEY", "")
-except Exception:
-    _secret_key = ""
+info, rt, gu_rt, gu_info = load_data()
 
-# 사이드바보다 먼저 선언 (사이드바에서 덮어씀)
-if "api_key" not in st.session_state:
-    st.session_state.api_key = _secret_key
+GU_LIST      = sorted(info["구"].dropna().unique().tolist())
+UPDATE_TIME  = rt["현재 주차 차량수 업데이트시간"].iloc[0] if len(rt) > 0 else "-"
 PLOT_BASE    = dict(
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(255,255,255,0.9)",
@@ -227,12 +176,6 @@ PLOT_BASE    = dict(
 with st.sidebar:
     st.markdown("### 🅿️ Seoul ParkMap")
     st.markdown("---")
-
-    if st.button("🔄 데이터 새로고침", use_container_width=True):
-        load_data.clear()
-        st.rerun()
-
-    st.markdown("---")
     view = st.radio(
         "화면",
         ["📊 전체 현황", "🗺️ 구별 현황", "📋 주차장 목록"],
@@ -240,67 +183,12 @@ with st.sidebar:
     )
     st.markdown("---")
     st.markdown("**필터**")
-
-    # 필터는 데이터 로드 후 채움
-    gu_ph   = st.empty()
-    kind_ph = st.empty()
-    fee_ph  = st.empty()
-
+    sel_gu   = st.multiselect("자치구",    GU_LIST,                                        placeholder="전체")
+    sel_kind = st.multiselect("주차장 종류", info["주차장 종류명"].dropna().unique().tolist(), placeholder="전체")
+    sel_fee  = st.multiselect("유무료",    ["유료", "무료"],                                placeholder="전체")
     st.markdown("---")
-
-
-# ─────────────────────────────────────────
-# 데이터 로드
-# ─────────────────────────────────────────
-with st.spinner("실시간 주차 데이터를 불러오는 중..."):
-    info, rt, gu_rt, gu_info, UPDATE_TIME = load_data(st.session_state.api_key)
-
-if info is None:
-    st.error("데이터를 불러오지 못했습니다.")
-
-    # 디버깅: API 응답 원본 컬럼 확인
-    with st.expander("🔍 API 응답 디버깅 (클릭하여 확인)"):
-        test_url = f"http://openapi.seoul.go.kr:8088/{st.session_state.api_key}/json/GetParkInfo/1/3/"
-        try:
-            resp = requests.get(test_url, timeout=10)
-            data = resp.json()
-            st.write("**API 응답 전체 키:**", list(data.keys()))
-            if "GetParkInfo" in data:
-                rows_sample = data["GetParkInfo"].get("row", [])
-                if rows_sample:
-                    st.write("**실제 컬럼명 (첫 번째 행):**", list(rows_sample[0].keys()))
-                    st.json(rows_sample[0])
-                else:
-                    st.warning("row 데이터가 없습니다. API 키 또는 서비스 신청 여부를 확인하세요.")
-                    st.write("응답 내용:", data["GetParkInfo"])
-            else:
-                st.write("응답:", data)
-        except Exception as e:
-            st.error(f"API 호출 오류: {e}")
-
-    st.info(
-        "**확인 사항:**\n"
-        "- API 키가 올바른지 확인\n"
-        "- [data.seoul.go.kr](https://data.seoul.go.kr) → 마이페이지 → `GetParkInfo` 서비스 신청 여부 확인\n"
-        "- 위 디버깅 창을 열어 실제 API 응답을 확인하세요"
-    )
-    st.stop()
-
-GU_LIST = sorted(info["구"].dropna().unique().tolist())
-
-# 필터 채우기
-with gu_ph:
-    sel_gu   = st.multiselect("자치구", GU_LIST, placeholder="전체", key="f_gu")
-with kind_ph:
-    KIND_LIST = rt["주차장 종류명"].dropna().unique().tolist() if "주차장 종류명" in rt.columns else []
-    sel_kind  = st.multiselect("주차장 종류", KIND_LIST, placeholder="전체", key="f_kind")
-with fee_ph:
-    FEE_LIST = rt["유무료구분명"].dropna().unique().tolist() if "유무료구분명" in rt.columns else []
-    sel_fee  = st.multiselect("유무료", FEE_LIST, placeholder="전체", key="f_fee")
-
-with st.sidebar:
-    st.caption(f"📡 마지막 갱신: {UPDATE_TIME}")
-    st.caption("출처: 서울 열린데이터광장")
+    st.caption(f"📡 데이터 기준: {UPDATE_TIME[:16]}")
+    st.caption("출처: 서울 열린데이터 광장")
 
 
 def filt(df):
@@ -316,7 +204,7 @@ def filt(df):
 # ─────────────────────────────────────────────────────────────────────────────
 if "전체 현황" in view:
     st.markdown('<div class="page-title">📊 서울시 공영주차장 전체 현황</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="page-sub">실시간 기준: {UPDATE_TIME} &nbsp;|&nbsp; 총 주차면 10면 이하 이상치 제거 &nbsp;|&nbsp; 5분 자동 갱신</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="page-sub">실시간 기준: {UPDATE_TIME[:16]} &nbsp;|&nbsp; 총 주차면 10면 이하 이상치 제거</div>', unsafe_allow_html=True)
 
     fi = filt(info)
     fr = filt(rt)
@@ -371,18 +259,14 @@ if "전체 현황" in view:
 
     with col2:
         st.markdown("#### 주차장 종류 비율")
-        kind_col = next((c for c in ["주차장 종류명", "주차장 종류", "운영구분명", "운영구분"] if c in fi.columns and fi[c].notna().any()), None)
-        if kind_col:
-            vc = fi[kind_col].value_counts()
-            fig2 = go.Figure(go.Pie(
-                labels=vc.index, values=vc.values, hole=0.45,
-                marker=dict(colors=["#1a6fc4", "#0f7b6c", "#d35400", "#8e44ad", "#2ecc71"]),
-                textinfo="label+percent",
-            ))
-            fig2.update_layout(**PLOT_BASE, height=280, showlegend=False)
-            st.plotly_chart(fig2, use_container_width=True)
-        else:
-            st.info("API에서 주차장 종류 정보를 제공하지 않습니다.")
+        vc = fi["주차장 종류명"].value_counts()
+        fig2 = go.Figure(go.Pie(
+            labels=vc.index, values=vc.values, hole=0.45,
+            marker=dict(colors=["#1a6fc4", "#0f7b6c", "#d35400", "#8e44ad", "#2ecc71"]),
+            textinfo="label+percent",
+        ))
+        fig2.update_layout(**PLOT_BASE, height=280, showlegend=False)
+        st.plotly_chart(fig2, use_container_width=True)
 
     col3, col4 = st.columns([2, 1])
 
@@ -408,27 +292,19 @@ if "전체 현황" in view:
 
     with col4:
         st.markdown("#### 유무료 현황")
-        fee_col = next((c for c in ["유무료구분명", "유무료구분"] if c in fi.columns and fi[c].notna().any()), None)
-        if fee_col:
-            vc2 = fi[fee_col].value_counts()
-            fig4 = go.Figure(go.Pie(
-                labels=vc2.index, values=vc2.values, hole=0.5,
-                marker=dict(colors=["#1a6fc4", "#2ecc71"]),
-                textinfo="label+value",
-            ))
-            fig4.update_layout(**PLOT_BASE, height=240, showlegend=False)
-            st.plotly_chart(fig4, use_container_width=True)
-        else:
-            st.info("API에서 유무료 정보를 제공하지 않습니다.")
+        vc2 = fi["유무료구분명"].value_counts()
+        fig4 = go.Figure(go.Pie(
+            labels=vc2.index, values=vc2.values, hole=0.5,
+            marker=dict(colors=["#1a6fc4", "#2ecc71"]),
+            textinfo="label+value",
+        ))
+        fig4.update_layout(**PLOT_BASE, height=240, showlegend=False)
+        st.plotly_chart(fig4, use_container_width=True)
 
         st.markdown("#### 운영 구분 Top 5")
-        oper_col = next((c for c in ["운영구분명", "운영구분"] if c in fi.columns and fi[c].notna().any()), None)
-        if oper_col:
-            for nm, c in fi[oper_col].value_counts().head(5).items():
-                pct = round(c / max(len(fi), 1) * 100, 1)
-                st.markdown(f"**{nm}** `{c:,}개` {pct}%")
-        else:
-            st.info("API에서 운영구분 정보를 제공하지 않습니다.")
+        for nm, c in fi["운영구분명"].value_counts().head(5).items():
+            pct = round(c / max(len(fi), 1) * 100, 1)
+            st.markdown(f"**{nm}** `{c:,}개` {pct}%")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -436,7 +312,7 @@ if "전체 현황" in view:
 # ─────────────────────────────────────────────────────────────────────────────
 elif "구별 현황" in view:
     st.markdown('<div class="page-title">🗺️ 자치구별 주차 현황</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="page-sub">전체 공영주차장 인프라 및 실시간 이용 현황 비교 &nbsp;|&nbsp; 기준: {UPDATE_TIME}</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-sub">전체 공영주차장 인프라 및 실시간 이용 현황 비교</div>', unsafe_allow_html=True)
 
     merged = pd.merge(gu_info, gu_rt, on="구", how="outer").fillna(0)
     merged["실시간이용률"] = merged.apply(
@@ -642,67 +518,88 @@ elif "구별 현황" in view:
 # ─────────────────────────────────────────────────────────────────────────────
 elif "주차장 목록" in view:
     st.markdown('<div class="page-title">📋 주차장 목록 조회</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="page-sub">API 실시간 데이터 &nbsp;|&nbsp; 기준: {UPDATE_TIME} &nbsp;|&nbsp; 5분 자동 갱신</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-sub">실시간 데이터(시영 180개소) + 전체 공영주차장(2,579개소) 통합 조회</div>', unsafe_allow_html=True)
 
-    fr2 = filt(rt)
+    tab1, tab2 = st.tabs(["🔴 실시간 현황 (180개소)", "📁 전체 공영주차장 (2,579개소)"])
 
-    col_s1, col_s2 = st.columns([2, 2])
-    with col_s1:
+    with tab1:
+        fr2 = filt(rt)
+
         sort_opt = st.selectbox(
             "정렬", ["이용률 높은 순", "이용률 낮은 순", "가용면 많은 순", "가용면 적은 순"], key="s1"
         )
-    with col_s2:
-        search = st.text_input("주차장명 검색", placeholder="예: 세종로, 강남...", key="search")
+        sm = {
+            "이용률 높은 순": ("이용률", False), "이용률 낮은 순": ("이용률", True),
+            "가용면 많은 순": ("가용면", False), "가용면 적은 순": ("가용면", True),
+        }
+        sc, asc = sm[sort_opt]
+        fr2 = fr2.sort_values(sc, ascending=asc)
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("조회 주차장", f"{len(fr2)}개소")
+        c2.metric("총 주차면",   f"{int(fr2['총 주차면'].sum()):,}면")
+        c3.metric("현재 차량",   f"{int(fr2['현재 주차 차량수'].sum()):,}대")
+        c4.metric("가용 면수",   f"{int(fr2['가용면'].sum()):,}면")
+
+        cols_rt = ["구", "주차장명", "주소", "총 주차면", "현재 주차 차량수",
+                   "가용면", "이용률", "혼잡도", "기본 주차 요금", "일 최대 요금"]
+        disp_rt = fr2[cols_rt].copy()
+        disp_rt.columns = ["구", "주차장명", "주소", "총 주차면", "현재 차량",
+                            "가용면", "이용률(%)", "혼잡도", "기본요금(원)", "일최대요금(원)"]
+
+        st.dataframe(
+            disp_rt.style
+                .background_gradient(subset=["이용률(%)"], cmap="RdYlGn_r", vmin=0, vmax=100)
+                .format({"총 주차면": "{:,.0f}", "현재 차량": "{:,.0f}", "가용면": "{:,.0f}",
+                         "이용률(%)": "{:.1f}", "기본요금(원)": "{:,.0f}", "일최대요금(원)": "{:,.0f}"}),
+            use_container_width=True, height=460, hide_index=True,
+        )
+        st.download_button(
+            "📥 CSV 다운로드",
+            disp_rt.to_csv(index=False, encoding="utf-8-sig"),
+            file_name="실시간_주차현황.csv", mime="text/csv",
+        )
+
+    with tab2:
+        fi2 = filt(info)
+
+        search = st.text_input("주차장명 검색", placeholder="예: 세종로, 종로...")
         if search:
-            fr2 = fr2[fr2["주차장명"].str.contains(search, na=False)]
+            fi2 = fi2[fi2["주차장명"].str.contains(search, na=False)]
 
-    sm = {
-        "이용률 높은 순": ("이용률", False), "이용률 낮은 순": ("이용률", True),
-        "가용면 많은 순": ("가용면", False), "가용면 적은 순": ("가용면", True),
-    }
-    sc, asc = sm[sort_opt]
-    fr2 = fr2.sort_values(sc, ascending=asc)
+        sort_opt2 = st.selectbox("정렬", ["주차면 많은 순", "기본요금 낮은 순", "기본요금 높은 순"], key="s2")
+        if sort_opt2 == "주차면 많은 순":
+            fi2 = fi2.sort_values("총 주차면", ascending=False)
+        elif sort_opt2 == "기본요금 낮은 순":
+            fi2 = fi2.sort_values("기본 주차 요금")
+        elif sort_opt2 == "기본요금 높은 순":
+            fi2 = fi2.sort_values("기본 주차 요금", ascending=False)
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("조회 주차장", f"{len(fr2):,}개소")
-    c2.metric("총 주차면",   f"{int(fr2['총 주차면'].sum()):,}면")
-    c3.metric("현재 차량",   f"{int(fr2['현재 주차 차량수'].sum()):,}대")
-    c4.metric("가용 면수",   f"{int(fr2['가용면'].sum()):,}면")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("조회 주차장", f"{len(fi2):,}개소")
+        c2.metric("총 주차면",   f"{int(fi2['총 주차면'].sum()):,}면")
+        c3.metric("유료 비율",   f"{round(len(fi2[fi2['유무료구분명']=='유료']) / max(len(fi2), 1) * 100, 1)}%")
 
-    # 표시할 컬럼 구성 (API에 있는 것만)
-    base_cols = ["구", "주차장명", "주소", "총 주차면", "현재 주차 차량수", "가용면", "이용률", "혼잡도"]
-    opt_cols  = ["주차장 종류명", "유무료구분명", "기본 주차 요금",
-                 "기본 주차 시간(분 단위)", "일 최대 요금", "월 정기권 금액", "전화번호"]
-    show_cols = base_cols + [c for c in opt_cols if c in fr2.columns]
-    disp_rt   = fr2[show_cols].copy()
+        cols_info = ["구", "주차장명", "주소", "주차장 종류명", "운영구분명",
+                     "총 주차면", "유무료구분명", "기본 주차 요금", "기본 주차 시간(분 단위)",
+                     "일 최대 요금", "월 정기권 금액", "전화번호"]
+        disp_info = fi2[cols_info].copy()
+        disp_info.columns = ["구", "주차장명", "주소", "종류", "운영구분",
+                              "총 주차면", "유무료", "기본요금(원)", "기본시간(분)",
+                              "일최대요금(원)", "월정기권(원)", "전화번호"]
 
-    rename_map = {
-        "현재 주차 차량수":      "현재 차량",
-        "이용률":               "이용률(%)",
-        "주차장 종류명":         "종류",
-        "유무료구분명":          "유무료",
-        "기본 주차 요금":        "기본요금(원)",
-        "기본 주차 시간(분 단위)":"기본시간(분)",
-        "일 최대 요금":          "일최대요금(원)",
-        "월 정기권 금액":        "월정기권(원)",
-    }
-    disp_rt.rename(columns=rename_map, inplace=True)
-
-    fmt = {"총 주차면": "{:,.0f}", "현재 차량": "{:,.0f}",
-           "가용면": "{:,.0f}", "이용률(%)": "{:.1f}"}
-    for c in ["기본요금(원)", "기본시간(분)", "일최대요금(원)", "월정기권(원)"]:
-        if c in disp_rt.columns:
-            fmt[c] = "{:,.0f}"
-
-    st.dataframe(
-        disp_rt.style
-            .background_gradient(subset=["이용률(%)"], cmap="RdYlGn_r", vmin=0, vmax=100)
-            .format(fmt),
-        use_container_width=True, height=500, hide_index=True,
-    )
-    st.download_button(
-        "📥 CSV 다운로드",
-        disp_rt.to_csv(index=False, encoding="utf-8-sig"),
-        file_name=f"실시간_주차현황_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-        mime="text/csv",
-    )
+        st.dataframe(
+            disp_info.style.format({
+                "총 주차면":      "{:,.0f}",
+                "기본요금(원)":   "{:,.0f}",
+                "기본시간(분)":   "{:,.0f}",
+                "일최대요금(원)": "{:,.0f}",
+                "월정기권(원)":   "{:,.0f}",
+            }),
+            use_container_width=True, height=460, hide_index=True,
+        )
+        st.download_button(
+            "📥 CSV 다운로드",
+            disp_info.to_csv(index=False, encoding="utf-8-sig"),
+            file_name="공영주차장_전체목록.csv", mime="text/csv",
+        )
