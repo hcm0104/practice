@@ -105,38 +105,52 @@ def load_data(api_key: str):
 
     raw = pd.DataFrame(rows)
 
-    # ── 컬럼명 한글 통일 ──
+    # ── 컬럼명 한글 통일 (API 영문 필드 → 한글) ──
     col_map = {
-        "PKLT_CD":          "주차장코드",
-        "PARKING_NAME":     "주차장명",
-        "ADDR":             "주소",
-        "PARKING_TYPE_NM":  "주차장 종류명",
-        "OPER_SE_NM":       "운영구분명",
-        "CAPACITY":         "총 주차면",
-        "CUR_PARKING":      "현재 주차 차량수",
-        "PAY_YN_NM":        "유무료구분명",
-        "RATES":            "기본 주차 요금",
-        "TIME_RATE":        "기본 주차 시간(분 단위)",
-        "ADD_RATES":        "추가 단위 요금",
-        "ADD_TIME_RATE":    "추가 단위 시간(분 단위)",
-        "DAY_MAXIMUM":      "일 최대 요금",
-        "MONTHLY_TICKET_GIFT": "월 정기권 금액",
-        "LAT":              "위도",
-        "LNG":              "경도",
-        "TEL":              "전화번호",
-        "QUERY_DATE":       "현재 주차 차량수 업데이트시간",
+        "PKLT_CD":              "주차장코드",
+        "PARKING_NAME":         "주차장명",
+        "ADDR":                 "주소",
+        "PARKING_TYPE_NM":      "주차장 종류명",
+        "OPER_SE_NM":           "운영구분명",
+        "CAPACITY":             "총 주차면",
+        "CUR_PARKING":          "현재 주차 차량수",
+        "PAY_YN_NM":            "유무료구분명",
+        "RATES":                "기본 주차 요금",
+        "TIME_RATE":            "기본 주차 시간(분 단위)",
+        "ADD_RATES":            "추가 단위 요금",
+        "ADD_TIME_RATE":        "추가 단위 시간(분 단위)",
+        "DAY_MAXIMUM":          "일 최대 요금",
+        "MONTHLY_TICKET_GIFT":  "월 정기권 금액",
+        "LAT":                  "위도",
+        "LNG":                  "경도",
+        "TEL":                  "전화번호",
+        "QUERY_DATE":           "현재 주차 차량수 업데이트시간",
+        # API 버전에 따라 다를 수 있는 필드명도 대비
+        "NOW_PARKING_CNT":      "현재 주차 차량수",
+        "PARKING_CNT":          "총 주차면",
     }
     raw.rename(columns={k: v for k, v in col_map.items() if k in raw.columns}, inplace=True)
 
+    # ── 필수 컬럼 없으면 기본값으로 생성 ──
+    if "주차장코드" not in raw.columns:
+        raw["주차장코드"] = raw.index.astype(str)
+    if "총 주차면" not in raw.columns:
+        raw["총 주차면"] = 0
+    if "현재 주차 차량수" not in raw.columns:
+        raw["현재 주차 차량수"] = 0
+    if "주소" not in raw.columns:
+        raw["주소"] = ""
+
     raw["구"] = raw["주소"].str.extract(r"([가-힣]+구)")
 
+    # ── 수치 변환 ──
     for col in ["총 주차면", "현재 주차 차량수", "기본 주차 요금",
                 "기본 주차 시간(분 단위)", "추가 단위 요금", "추가 단위 시간(분 단위)",
                 "일 최대 요금", "월 정기권 금액", "위도", "경도"]:
         if col in raw.columns:
             raw[col] = pd.to_numeric(raw[col], errors="coerce").fillna(0)
 
-    # info : 전체 주차장 (정적 정보)
+    # info : 전체 주차장
     info = raw.copy()
 
     # rt : 이상치 제거 후 실시간 현황
@@ -259,10 +273,33 @@ with st.spinner("실시간 주차 데이터를 불러오는 중..."):
     info, rt, gu_rt, gu_info, UPDATE_TIME = load_data(st.session_state.api_key)
 
 if info is None:
-    st.error(
-        "데이터를 불러오지 못했습니다.\n\n"
-        "- API 키가 올바른지 확인해 주세요.\n"
-        "- [data.seoul.go.kr](https://data.seoul.go.kr)에서 `GetParkInfo` 서비스 신청 여부를 확인해 주세요."
+    st.error("데이터를 불러오지 못했습니다.")
+
+    # 디버깅: API 응답 원본 컬럼 확인
+    with st.expander("🔍 API 응답 디버깅 (클릭하여 확인)"):
+        test_url = f"http://openapi.seoul.go.kr:8088/{st.session_state.api_key}/json/GetParkInfo/1/3/"
+        try:
+            resp = requests.get(test_url, timeout=10)
+            data = resp.json()
+            st.write("**API 응답 전체 키:**", list(data.keys()))
+            if "GetParkInfo" in data:
+                rows_sample = data["GetParkInfo"].get("row", [])
+                if rows_sample:
+                    st.write("**실제 컬럼명 (첫 번째 행):**", list(rows_sample[0].keys()))
+                    st.json(rows_sample[0])
+                else:
+                    st.warning("row 데이터가 없습니다. API 키 또는 서비스 신청 여부를 확인하세요.")
+                    st.write("응답 내용:", data["GetParkInfo"])
+            else:
+                st.write("응답:", data)
+        except Exception as e:
+            st.error(f"API 호출 오류: {e}")
+
+    st.info(
+        "**확인 사항:**\n"
+        "- API 키가 올바른지 확인\n"
+        "- [data.seoul.go.kr](https://data.seoul.go.kr) → 마이페이지 → `GetParkInfo` 서비스 신청 여부 확인\n"
+        "- 위 디버깅 창을 열어 실제 API 응답을 확인하세요"
     )
     st.stop()
 
