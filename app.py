@@ -54,7 +54,7 @@ RT_CSV   = find_csv("서울시_시영주차장_실시간_주차대수_정보.csv
 
 
 # ─────────────────────────────────────────
-# 서울 25개 구 중심 좌표 (지도용)
+# 서울 25개 구 중심 좌표
 # ─────────────────────────────────────────
 GU_COORDS = {
     "종로구":(37.5909,126.9718), "중구":(37.5636,126.9975), "용산구":(37.5326,126.9902),
@@ -153,19 +153,19 @@ PLOT_BASE    = dict(
 
 
 # ─────────────────────────────────────────
-# 혼잡도 색상 헬퍼
+# 혼잡도 헬퍼
 # ─────────────────────────────────────────
 def cong_color(rate):
-    if rate >= 95: return "#e74c3c"
+    if rate >= 95:   return "#e74c3c"
     elif rate >= 70: return "#f39c12"
     elif rate >= 30: return "#3498db"
-    else: return "#2ecc71"
+    else:            return "#2ecc71"
 
 def cong_label(rate):
-    if rate >= 95: return "만차"
+    if rate >= 95:   return "만차"
     elif rate >= 70: return "혼잡"
     elif rate >= 30: return "보통"
-    else: return "여유"
+    else:            return "여유"
 
 
 # ─────────────────────────────────────────
@@ -306,7 +306,7 @@ if "전체 현황" in view:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ② 구별 현황  ── 원본 + 지도 추가
+# ② 구별 현황  ── 지도 추가 후 원본 테이블·차트
 # ─────────────────────────────────────────────────────────────────────────────
 elif "구별 현황" in view:
     st.markdown('<div class="page-title">🗺️ 자치구별 주차 현황</div>', unsafe_allow_html=True)
@@ -321,8 +321,8 @@ elif "구별 현황" in view:
         merged = merged[merged["구"].isin(sel_gu)]
     merged = merged.sort_values("전체주차장수", ascending=False)
 
-    # ── 지도 + 혼잡도 순위 카드 ──────────────────────────────────────────────
-    st.markdown("#### 🗺️ 구별 혼잡도 지도")
+    # ── 지도 + 순위 카드 ──────────────────────────────────────────────────────
+    st.markdown("#### 구별 혼잡도 지도")
     st.caption("마커를 클릭하면 해당 구의 상세 정보를 볼 수 있습니다.")
 
     map_col, rank_col = st.columns([3, 2], gap="medium")
@@ -395,7 +395,7 @@ elif "구별 현황" in view:
             background:white;border:1px solid #dde3ec;border-radius:12px;
             padding:12px 14px;box-shadow:0 2px 10px rgba(0,0,0,.1);font-family:'Noto Sans KR',sans-serif;">
           <div style="font-size:11px;font-weight:700;color:#1b2a4a;margin-bottom:8px;">혼잡도 기준</div>
-          <div style="font-size:12px;color:#6b7a99;line-height:2;">
+          <div style="font-size:12px;color:#6b7a99;line-height:2.2;">
             <span style="color:#2ecc71;font-weight:700;">●</span> 여유 (~30%)<br>
             <span style="color:#3498db;font-weight:700;">●</span> 보통 (30–70%)<br>
             <span style="color:#f39c12;font-weight:700;">●</span> 혼잡 (70–95%)<br>
