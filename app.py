@@ -388,14 +388,17 @@ if "전체 현황" in view:
 
     with col2:
         st.markdown("#### 주차장 종류 비율")
-        vc = fi["주차장 종류명"].value_counts()
-        fig2 = go.Figure(go.Pie(
-            labels=vc.index, values=vc.values, hole=0.45,
-            marker=dict(colors=["#1a6fc4", "#0f7b6c", "#d35400", "#8e44ad", "#2ecc71"]),
-            textinfo="label+percent",
-        ))
-        fig2.update_layout(**PLOT_BASE, height=280, showlegend=False)
-        st.plotly_chart(fig2, use_container_width=True)
+        if "주차장 종류명" in fi.columns and fi["주차장 종류명"].notna().any():
+            vc = fi["주차장 종류명"].value_counts()
+            fig2 = go.Figure(go.Pie(
+                labels=vc.index, values=vc.values, hole=0.45,
+                marker=dict(colors=["#1a6fc4", "#0f7b6c", "#d35400", "#8e44ad", "#2ecc71"]),
+                textinfo="label+percent",
+            ))
+            fig2.update_layout(**PLOT_BASE, height=280, showlegend=False)
+            st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.info("API에서 주차장 종류 정보를 제공하지 않습니다.")
 
     col3, col4 = st.columns([2, 1])
 
@@ -421,19 +424,25 @@ if "전체 현황" in view:
 
     with col4:
         st.markdown("#### 유무료 현황")
-        vc2 = fi["유무료구분명"].value_counts()
-        fig4 = go.Figure(go.Pie(
-            labels=vc2.index, values=vc2.values, hole=0.5,
-            marker=dict(colors=["#1a6fc4", "#2ecc71"]),
-            textinfo="label+value",
-        ))
-        fig4.update_layout(**PLOT_BASE, height=240, showlegend=False)
-        st.plotly_chart(fig4, use_container_width=True)
+        if "유무료구분명" in fi.columns and fi["유무료구분명"].notna().any():
+            vc2 = fi["유무료구분명"].value_counts()
+            fig4 = go.Figure(go.Pie(
+                labels=vc2.index, values=vc2.values, hole=0.5,
+                marker=dict(colors=["#1a6fc4", "#2ecc71"]),
+                textinfo="label+value",
+            ))
+            fig4.update_layout(**PLOT_BASE, height=240, showlegend=False)
+            st.plotly_chart(fig4, use_container_width=True)
+        else:
+            st.info("API에서 유무료 정보를 제공하지 않습니다.")
 
         st.markdown("#### 운영 구분 Top 5")
-        for nm, c in fi["운영구분명"].value_counts().head(5).items():
-            pct = round(c / max(len(fi), 1) * 100, 1)
-            st.markdown(f"**{nm}** `{c:,}개` {pct}%")
+        if "운영구분명" in fi.columns and fi["운영구분명"].notna().any():
+            for nm, c in fi["운영구분명"].value_counts().head(5).items():
+                pct = round(c / max(len(fi), 1) * 100, 1)
+                st.markdown(f"**{nm}** `{c:,}개` {pct}%")
+        else:
+            st.info("API에서 운영구분 정보를 제공하지 않습니다.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
