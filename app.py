@@ -2,52 +2,110 @@ import streamlit as st
 import pandas as pd
 import requests
 import pydeck as pdk
+import xml.etree.ElementTree as ET
 
-st.set_page_config(page_title="서울 공영주차장 실시간 지도", layout="wide")
+st.set_page_config(page_title="서울 주차장 지도", layout="wide")
 
 st.title("🚗 서울 시영주차장 실시간 현황")
 
 # -------------------------
-# 🔑 API KEY 입력
+# 🔑 API KEY
 # -------------------------
 API_KEY = st.secrets.get("SEOUL_API_KEY", "YOUR_API_KEY")
 
 # -------------------------
-# 📡 데이터 불러오기
+# 📡 데이터 로드 (JSON + XML 대응)
 # -------------------------
 @st.cache_data(ttl=300)
 def load_data():
-    url = f"http://openapi.seoul.go.kr:8088/{API_KEY}/json/GetParkingInfo/1/200"
+    url = f"http://openapi.seoul.go.kr:8088/{API_KEY}/GetParkingInfo/1/100"
 
-    response = requests.get(url)
-    data = response.json()
+    try:
+        response = requests.get(url, timeout=10)
 
-    rows = data['GetParkingInfo']['row']
-    df = pd.DataFrame(rows)
+        if response.status_code != 200:
+            st.error(f"API 오류: {response.status_code}")
+            return pd.DataFrame()
 
-    # 필요한 컬럼 정리 (컬럼명은 실제 API에 따라 다를 수 있음)
-    df = df.rename(columns={
-        "PARKING_NAME": "주차장명",
-        "ADDR": "주소",
-        "LAT": "위도",
-        "LNG": "경도",
-        "CAPACITY": "총주차면",
-        "CUR_PARKING": "현재차량"
-    })
+        text = response.text.strip()
 
-    # 숫자형 변환
-    df["총주차면"] = pd.to_numeric(df["총주차면"], errors="coerce")
-    df["현재차량"] = pd.to_numeric(df["현재차량"], errors="coerce")
+        # -------------------------
+        # ✅ JSON 처리
+        # -------------------------
+        if text.startswith("{"):
+            data = response.json()
 
-    # 가동률 계산
-    df["가동률"] = (df["현재차량"] / df["총주차면"]) * 100
+            if "GetParkingInfo" not in data:
+                st.error("JSON 구조 오류")
+                st.json(data)
+                return pd.DataFrame()
 
-    # 좌표 결측 제거
-    df = df.dropna(subset=["위도", "경도"])
+            rows = data["GetParkingInfo"]["row"]
+            df = pd.DataFrame(rows)
 
-    return df
+        # -------------------------
+        # ✅ XML 처리
+        # -------------------------
+        elif text.startswith("<"):
+            root = ET.fromstring(text)
+
+            rows = []
+            for row in root.findall(".//row"):
+                item = {}
+                for child in row:
+                    item[child.tag] = child.text
+                rows.append(item)
+
+            df = pd.DataFrame(rows)
+
+        else:
+            st.error("알 수 없는 응답 형식")
+            st.text(text[:300])
+            return pd.DataFrame()
+
+        if df.empty:
+            st.warning("데이터 없음")
+            return df
+
+        # -------------------------
+        # 컬럼 정리
+        # -------------------------
+        df.rename(columns={
+            "PARKING_NAME": "주차장명",
+            "ADDR": "주소",
+            "LAT": "위도",
+            "LNG": "경도",
+            "CAPACITY": "총주차면",
+            "CUR_PARKING": "현재차량"
+        }, inplace=True)
+
+        # 숫자 변환
+        df["총주차면"] = pd.to_numeric(df.get("총주차면"), errors="coerce")
+        df["현재차량"] = pd.to_numeric(df.get("현재차량"), errors="coerce")
+
+        # 가동률
+        df["가동률"] = (df["현재차량"] / df["총주차면"]) * 100
+
+        # 좌표
+        df["위도"] = pd.to_numeric(df.get("위도"), errors="coerce")
+        df["경도"] = pd.to_numeric(df.get("경도"), errors="coerce")
+
+        df = df.dropna(subset=["위도", "경도"])
+
+        return df
+
+    except Exception as e:
+        st.error(f"에러 발생: {e}")
+        return pd.DataFrame()
+
 
 df = load_data()
+
+# -------------------------
+# ❗ 데이터 없으면 종료
+# -------------------------
+if df.empty:
+    st.stop()
 
 # -------------------------
 # 🔍 필터
@@ -55,17 +113,16 @@ df = load_data()
 st.sidebar.header("필터")
 
 min_rate, max_rate = st.sidebar.slider(
-    "가동률 범위 (%)",
-    0, 150, (0, 120)
+    "가동률 (%)", 0, 150, (0, 120)
 )
 
 filtered_df = df[
     (df["가동률"] >= min_rate) &
     (df["가동률"] <= max_rate)
-]
+].copy()
 
 # -------------------------
-# 🎨 색상 설정
+# 🎨 색상
 # -------------------------
 def get_color(rate):
     if rate < 50:
@@ -94,7 +151,7 @@ layer = pdk.Layer(
 view_state = pdk.ViewState(
     latitude=37.55,
     longitude=126.98,
-    zoom=11,
+    zoom=11
 )
 
 tooltip = {
@@ -116,7 +173,7 @@ st.pydeck_chart(pdk.Deck(
 # -------------------------
 # 📊 요약
 # -------------------------
-st.subheader("📊 실시간 요약")
+st.subheader("📊 요약")
 
 col1, col2, col3 = st.columns(3)
 
@@ -127,5 +184,5 @@ col3.metric("최대 가동률", f"{filtered_df['가동률'].max():.1f}%")
 # -------------------------
 # 📋 테이블
 # -------------------------
-st.subheader("📋 상세 데이터")
+st.subheader("📋 데이터")
 st.dataframe(filtered_df)
