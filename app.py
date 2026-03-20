@@ -3,69 +3,98 @@ import pandas as pd
 import requests
 import pydeck as pdk
 
-st.set_page_config(page_title="서울 공영주차장 실시간 지도", layout="wide")
+st.set_page_config(page_title="서울 주차장 실시간 지도", layout="wide")
 
 st.title("🚗 서울 시영주차장 실시간 현황")
 
 # -------------------------
-# 🔑 API KEY 입력
+# 🔑 API KEY
 # -------------------------
 API_KEY = st.secrets.get("SEOUL_API_KEY", "YOUR_API_KEY")
 
 # -------------------------
-# 📡 데이터 불러오기
+# 📡 데이터 로드
 # -------------------------
 @st.cache_data(ttl=300)
 def load_data():
     url = f"http://openapi.seoul.go.kr:8088/{API_KEY}/json/GetParkingInfo/1/200"
 
-    response = requests.get(url)
-    data = response.json()
+    try:
+        response = requests.get(url, timeout=10)
 
-    rows = data['GetParkingInfo']['row']
-    df = pd.DataFrame(rows)
+        # 상태 체크
+        if response.status_code != 200:
+            st.error(f"API 요청 실패: {response.status_code}")
+            return pd.DataFrame()
 
-    # 필요한 컬럼 정리 (컬럼명은 실제 API에 따라 다를 수 있음)
-    df = df.rename(columns={
-        "PARKING_NAME": "주차장명",
-        "ADDR": "주소",
-        "LAT": "위도",
-        "LNG": "경도",
-        "CAPACITY": "총주차면",
-        "CUR_PARKING": "현재차량"
-    })
+        data = response.json()
 
-    # 숫자형 변환
-    df["총주차면"] = pd.to_numeric(df["총주차면"], errors="coerce")
-    df["현재차량"] = pd.to_numeric(df["현재차량"], errors="coerce")
+        # 구조 확인
+        if "GetParkingInfo" not in data:
+            st.error("API 구조 오류")
+            st.json(data)
+            return pd.DataFrame()
 
-    # 가동률 계산
-    df["가동률"] = (df["현재차량"] / df["총주차면"]) * 100
+        rows = data["GetParkingInfo"]["row"]
+        df = pd.DataFrame(rows)
 
-    # 좌표 결측 제거
-    df = df.dropna(subset=["위도", "경도"])
+        # -------------------------
+        # 컬럼 처리
+        # -------------------------
+        df.rename(columns={
+            "PARKING_NAME": "주차장명",
+            "ADDR": "주소",
+            "LAT": "위도",
+            "LNG": "경도",
+            "CAPACITY": "총주차면",
+            "CUR_PARKING": "현재차량"
+        }, inplace=True)
 
-    return df
+        # 숫자 변환
+        df["총주차면"] = pd.to_numeric(df["총주차면"], errors="coerce")
+        df["현재차량"] = pd.to_numeric(df["현재차량"], errors="coerce")
+
+        # 가동률 계산
+        df["가동률"] = (df["현재차량"] / df["총주차면"]) * 100
+
+        # 좌표 처리
+        df["위도"] = pd.to_numeric(df["위도"], errors="coerce")
+        df["경도"] = pd.to_numeric(df["경도"], errors="coerce")
+
+        df = df.dropna(subset=["위도", "경도"])
+
+        return df
+
+    except Exception as e:
+        st.error(f"에러 발생: {e}")
+        return pd.DataFrame()
+
 
 df = load_data()
 
 # -------------------------
+# ❗ 데이터 없으면 종료
+# -------------------------
+if df.empty:
+    st.stop()
+
+# -------------------------
 # 🔍 필터
 # -------------------------
-st.sidebar.header("필터")
+st.sidebar.header("🔍 가동률 필터")
 
 min_rate, max_rate = st.sidebar.slider(
-    "가동률 범위 (%)",
+    "가동률 (%)",
     0, 150, (0, 120)
 )
 
 filtered_df = df[
     (df["가동률"] >= min_rate) &
     (df["가동률"] <= max_rate)
-]
+].copy()
 
 # -------------------------
-# 🎨 색상 설정
+# 🎨 색상
 # -------------------------
 def get_color(rate):
     if rate < 50:
@@ -94,7 +123,7 @@ layer = pdk.Layer(
 view_state = pdk.ViewState(
     latitude=37.55,
     longitude=126.98,
-    zoom=11,
+    zoom=11
 )
 
 tooltip = {
@@ -116,7 +145,7 @@ st.pydeck_chart(pdk.Deck(
 # -------------------------
 # 📊 요약
 # -------------------------
-st.subheader("📊 실시간 요약")
+st.subheader("📊 요약")
 
 col1, col2, col3 = st.columns(3)
 
@@ -127,5 +156,5 @@ col3.metric("최대 가동률", f"{filtered_df['가동률'].max():.1f}%")
 # -------------------------
 # 📋 테이블
 # -------------------------
-st.subheader("📋 상세 데이터")
+st.subheader("📋 데이터")
 st.dataframe(filtered_df)
