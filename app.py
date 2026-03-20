@@ -1,124 +1,107 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import pydeck as pdk
 
-st.set_page_config(page_title="서울 환경-보건 지도", layout="wide")
+st.set_page_config(page_title="서울 공영주차장 실시간 현황", layout="wide")
 
-st.title("🌍 서울 환경 정책 실효성 지도 대시보드")
-st.markdown("자가용 이용률 → NOx → 폐질환 구조를 공간적으로 시각화")
+st.title("🚗 서울 공영주차장 실시간 현황 지도")
 
-# ---------------------------
-# 1. 서울 좌표 기반 데이터 생성
-# ---------------------------
+# -------------------------
+# 데이터 로드 (샘플 구조)
+# -------------------------
 @st.cache_data
 def load_data():
-    np.random.seed(42)
-    n = 50
-
-    # 서울 중심 좌표
-    lat_center = 37.5665
-    lon_center = 126.9780
-
+    # 👉 실제로는 CSV 또는 API로 교체
     data = pd.DataFrame({
-        "Region": [f"R{i}" for i in range(n)],
-        "lat": lat_center + np.random.uniform(-0.05, 0.05, n),
-        "lon": lon_center + np.random.uniform(-0.05, 0.05, n),
-        "Car_Usage": np.random.uniform(40, 90, n),
-        "Pop_Density": np.random.uniform(5000, 20000, n),
+        "주차장명": ["구파발역", "잠실역", "종묘", "청량리", "강남"],
+        "위도": [37.6367, 37.5133, 37.5740, 37.5800, 37.4979],
+        "경도": [126.9180, 127.1000, 126.9910, 127.0480, 127.0276],
+        "총주차면": [399, 357, 1317, 1260, 500],
+        "현재차량": [475, 330, 1210, 1114, 450]
     })
 
-    data["NOx"] = 0.02 * data["Car_Usage"] + 0.0005 * data["Pop_Density"]
-    data["Lung_Disease"] = 18 * data["NOx"]
-
+    data["가동률"] = (data["현재차량"] / data["총주차면"]) * 100
     return data
 
 df = load_data()
 
-# ---------------------------
-# 2. 정책 선택
-# ---------------------------
-policy = st.sidebar.selectbox(
-    "정책 선택",
-    ["기본 상태", "대중교통 인센티브", "저배출구역(LEZ)", "통합 정책"]
+# -------------------------
+# 사이드바 필터
+# -------------------------
+st.sidebar.header("🔍 필터")
+
+min_rate, max_rate = st.sidebar.slider(
+    "가동률 범위 (%)",
+    0, 150, (0, 120)
 )
 
-df_sim = df.copy()
+filtered_df = df[
+    (df["가동률"] >= min_rate) &
+    (df["가동률"] <= max_rate)
+]
 
-if policy == "대중교통 인센티브":
-    df_sim["Car_Usage"] *= 0.9
+# -------------------------
+# 색상 설정 (가동률 기준)
+# -------------------------
+def get_color(rate):
+    if rate < 50:
+        return [0, 128, 255]  # 파랑 (여유)
+    elif rate < 80:
+        return [0, 200, 0]    # 초록 (적정)
+    elif rate < 100:
+        return [255, 165, 0]  # 주황 (혼잡)
+    else:
+        return [255, 0, 0]    # 빨강 (포화)
 
-elif policy == "저배출구역(LEZ)":
-    df_sim["NOx"] *= 0.8
+filtered_df["color"] = filtered_df["가동률"].apply(get_color)
 
-elif policy == "통합 정책":
-    df_sim["Car_Usage"] *= 0.85
-    df_sim["NOx"] *= 0.7
-
-df_sim["NOx"] = 0.02 * df_sim["Car_Usage"] + 0.0005 * df_sim["Pop_Density"]
-df_sim["Lung_Disease"] = 18 * df_sim["NOx"]
-
-# ---------------------------
-# 3. KPI
-# ---------------------------
-col1, col2 = st.columns(2)
-
-col1.metric("평균 NOx", f"{df_sim['NOx'].mean():.2f}")
-col2.metric("평균 폐질환 지수", f"{df_sim['Lung_Disease'].mean():.2f}")
-
-# ---------------------------
-# 4. 지도 시각화 (핵심)
-# ---------------------------
-st.subheader("🗺️ 서울 지역 폐질환 위험도 지도")
-
+# -------------------------
+# PyDeck 지도
+# -------------------------
 layer = pdk.Layer(
     "ScatterplotLayer",
-    df_sim,
-    get_position='[lon, lat]',
-    get_radius="Lung_Disease * 50",  # 크기로 위험도 표현
-    get_fill_color='[255, 0, 0, 160]',  # 빨간색
+    data=filtered_df,
+    get_position='[경도, 위도]',
+    get_fill_color="color",
+    get_radius=200,
     pickable=True,
 )
 
 view_state = pdk.ViewState(
-    latitude=37.5665,
-    longitude=126.9780,
-    zoom=10,
+    latitude=37.55,
+    longitude=126.98,
+    zoom=11,
+    pitch=0,
 )
 
 tooltip = {
     "html": """
-    <b>지역:</b> {Region} <br/>
-    <b>NOx:</b> {NOx} <br/>
-    <b>폐질환:</b> {Lung_Disease}
-    """
+    <b>{주차장명}</b><br/>
+    가동률: {가동률:.1f}%<br/>
+    현재: {현재차량} / {총주차면}
+    """,
+    "style": {"color": "white"}
 }
 
-deck = pdk.Deck(
+st.pydeck_chart(pdk.Deck(
     layers=[layer],
     initial_view_state=view_state,
-    tooltip=tooltip,
-)
+    tooltip=tooltip
+))
 
-st.pydeck_chart(deck)
+# -------------------------
+# 하단 요약
+# -------------------------
+st.subheader("📊 요약 지표")
 
-# ---------------------------
-# 5. 핫스팟 Top 10
-# ---------------------------
-st.subheader("🔥 위험 지역 Top 10")
+col1, col2, col3 = st.columns(3)
 
-top10 = df_sim.sort_values("Lung_Disease", ascending=False).head(10)
+col1.metric("총 주차장 수", len(filtered_df))
+col2.metric("평균 가동률", f"{filtered_df['가동률'].mean():.1f}%")
+col3.metric("최대 가동률", f"{filtered_df['가동률'].max():.1f}%")
 
-st.dataframe(top10, use_container_width=True)
-
-# ---------------------------
-# 6. 해석
-# ---------------------------
-st.subheader("🧠 해석")
-
-st.markdown(f"""
-- 선택 정책: **{policy}**
-- 지도에서 원의 크기가 클수록 건강 위험이 높은 지역
-- 고밀도 + 자가용 이용률 높은 지역이 핫스팟
-- 통합 정책 적용 시 전체적으로 위험도가 감소
-""")
+# -------------------------
+# 데이터 테이블
+# -------------------------
+st.subheader("📋 상세 데이터")
+st.dataframe(filtered_df)
