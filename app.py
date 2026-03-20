@@ -1,34 +1,58 @@
 import streamlit as st
 import pandas as pd
+import requests
 import pydeck as pdk
 
-st.set_page_config(page_title="서울 공영주차장 실시간 현황", layout="wide")
+st.set_page_config(page_title="서울 공영주차장 실시간 지도", layout="wide")
 
-st.title("🚗 서울 공영주차장 실시간 현황 지도")
+st.title("🚗 서울 시영주차장 실시간 현황")
 
 # -------------------------
-# 데이터 로드 (샘플 구조)
+# 🔑 API KEY 입력
 # -------------------------
-@st.cache_data
+API_KEY = st.secrets.get("SEOUL_API_KEY", "YOUR_API_KEY")
+
+# -------------------------
+# 📡 데이터 불러오기
+# -------------------------
+@st.cache_data(ttl=300)
 def load_data():
-    # 👉 실제로는 CSV 또는 API로 교체
-    data = pd.DataFrame({
-        "주차장명": ["구파발역", "잠실역", "종묘", "청량리", "강남"],
-        "위도": [37.6367, 37.5133, 37.5740, 37.5800, 37.4979],
-        "경도": [126.9180, 127.1000, 126.9910, 127.0480, 127.0276],
-        "총주차면": [399, 357, 1317, 1260, 500],
-        "현재차량": [475, 330, 1210, 1114, 450]
+    url = f"http://openapi.seoul.go.kr:8088/{API_KEY}/json/GetParkingInfo/1/200"
+
+    response = requests.get(url)
+    data = response.json()
+
+    rows = data['GetParkingInfo']['row']
+    df = pd.DataFrame(rows)
+
+    # 필요한 컬럼 정리 (컬럼명은 실제 API에 따라 다를 수 있음)
+    df = df.rename(columns={
+        "PARKING_NAME": "주차장명",
+        "ADDR": "주소",
+        "LAT": "위도",
+        "LNG": "경도",
+        "CAPACITY": "총주차면",
+        "CUR_PARKING": "현재차량"
     })
 
-    data["가동률"] = (data["현재차량"] / data["총주차면"]) * 100
-    return data
+    # 숫자형 변환
+    df["총주차면"] = pd.to_numeric(df["총주차면"], errors="coerce")
+    df["현재차량"] = pd.to_numeric(df["현재차량"], errors="coerce")
+
+    # 가동률 계산
+    df["가동률"] = (df["현재차량"] / df["총주차면"]) * 100
+
+    # 좌표 결측 제거
+    df = df.dropna(subset=["위도", "경도"])
+
+    return df
 
 df = load_data()
 
 # -------------------------
-# 사이드바 필터
+# 🔍 필터
 # -------------------------
-st.sidebar.header("🔍 필터")
+st.sidebar.header("필터")
 
 min_rate, max_rate = st.sidebar.slider(
     "가동률 범위 (%)",
@@ -41,22 +65,22 @@ filtered_df = df[
 ]
 
 # -------------------------
-# 색상 설정 (가동률 기준)
+# 🎨 색상 설정
 # -------------------------
 def get_color(rate):
     if rate < 50:
-        return [0, 128, 255]  # 파랑 (여유)
+        return [0, 128, 255]
     elif rate < 80:
-        return [0, 200, 0]    # 초록 (적정)
+        return [0, 200, 0]
     elif rate < 100:
-        return [255, 165, 0]  # 주황 (혼잡)
+        return [255, 165, 0]
     else:
-        return [255, 0, 0]    # 빨강 (포화)
+        return [255, 0, 0]
 
 filtered_df["color"] = filtered_df["가동률"].apply(get_color)
 
 # -------------------------
-# PyDeck 지도
+# 🗺️ 지도
 # -------------------------
 layer = pdk.Layer(
     "ScatterplotLayer",
@@ -71,14 +95,14 @@ view_state = pdk.ViewState(
     latitude=37.55,
     longitude=126.98,
     zoom=11,
-    pitch=0,
 )
 
 tooltip = {
     "html": """
     <b>{주차장명}</b><br/>
     가동률: {가동률:.1f}%<br/>
-    현재: {현재차량} / {총주차면}
+    현재: {현재차량} / {총주차면}<br/>
+    주소: {주소}
     """,
     "style": {"color": "white"}
 }
@@ -90,18 +114,18 @@ st.pydeck_chart(pdk.Deck(
 ))
 
 # -------------------------
-# 하단 요약
+# 📊 요약
 # -------------------------
-st.subheader("📊 요약 지표")
+st.subheader("📊 실시간 요약")
 
 col1, col2, col3 = st.columns(3)
 
-col1.metric("총 주차장 수", len(filtered_df))
+col1.metric("주차장 수", len(filtered_df))
 col2.metric("평균 가동률", f"{filtered_df['가동률'].mean():.1f}%")
 col3.metric("최대 가동률", f"{filtered_df['가동률'].max():.1f}%")
 
 # -------------------------
-# 데이터 테이블
+# 📋 테이블
 # -------------------------
 st.subheader("📋 상세 데이터")
 st.dataframe(filtered_df)
