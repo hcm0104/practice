@@ -107,27 +107,41 @@ def load_data(api_key: str):
 
     # ── 컬럼명 한글 통일 (API 영문 필드 → 한글) ──
     col_map = {
+        # 주차장 기본 정보
         "PKLT_CD":              "주차장코드",
         "PARKING_NAME":         "주차장명",
         "ADDR":                 "주소",
+        # 종류/운영 (API에 따라 없을 수 있음)
+        "PARKING_TYPE":         "주차장 종류",
         "PARKING_TYPE_NM":      "주차장 종류명",
+        "OPER_SE":              "운영구분",
         "OPER_SE_NM":           "운영구분명",
+        # 주차면 수
         "CAPACITY":             "총 주차면",
+        "PARKING_CNT":          "총 주차면",
+        # 현재 주차 차량수 (여러 필드명 대비)
         "CUR_PARKING":          "현재 주차 차량수",
+        "CUR_PARKING_CNT":      "현재 주차 차량수",
+        "NOW_PARKING_CNT":      "현재 주차 차량수",
+        "TPKCT":                "현재 주차 차량수",
+        # 유무료
+        "PAY_YN":               "유무료구분",
         "PAY_YN_NM":            "유무료구분명",
+        # 요금
         "RATES":                "기본 주차 요금",
         "TIME_RATE":            "기본 주차 시간(분 단위)",
         "ADD_RATES":            "추가 단위 요금",
         "ADD_TIME_RATE":        "추가 단위 시간(분 단위)",
         "DAY_MAXIMUM":          "일 최대 요금",
         "MONTHLY_TICKET_GIFT":  "월 정기권 금액",
+        # 위치
         "LAT":                  "위도",
         "LNG":                  "경도",
+        "GU_NM":                "구",
+        # 기타
         "TEL":                  "전화번호",
         "QUERY_DATE":           "현재 주차 차량수 업데이트시간",
-        # API 버전에 따라 다를 수 있는 필드명도 대비
-        "NOW_PARKING_CNT":      "현재 주차 차량수",
-        "PARKING_CNT":          "총 주차면",
+        "LAST_UPDATE_DATE":     "현재 주차 차량수 업데이트시간",
     }
     raw.rename(columns={k: v for k, v in col_map.items() if k in raw.columns}, inplace=True)
 
@@ -214,17 +228,6 @@ with st.sidebar:
     st.markdown("### 🅿️ Seoul ParkMap")
     st.markdown("---")
 
-    # ── API 키 입력 ──
-    api_key_input = st.text_input(
-        "🔑 서울 열린데이터광장 API 키",
-        value=st.session_state.api_key,
-        type="password",
-        placeholder="발급받은 인증키 입력",
-        help="data.seoul.go.kr → 로그인 → 마이페이지 → 인증키 발급",
-    )
-    if api_key_input:
-        st.session_state.api_key = api_key_input.strip()
-
     if st.button("🔄 데이터 새로고침", use_container_width=True):
         load_data.clear()
         st.rerun()
@@ -244,26 +247,6 @@ with st.sidebar:
     fee_ph  = st.empty()
 
     st.markdown("---")
-
-
-# ─────────────────────────────────────────
-# API 키 없을 때 안내
-# ─────────────────────────────────────────
-if not st.session_state.api_key:
-    st.markdown('<div class="page-title">🅿️ Seoul ParkMap — 실시간 공영주차장 현황</div>', unsafe_allow_html=True)
-    st.info(
-        "**좌측 사이드바에 API 키를 입력하면 실시간 데이터가 로드됩니다.**\n\n"
-        "**API 키 발급 방법:**\n"
-        "1. [data.seoul.go.kr](https://data.seoul.go.kr) 접속 → 회원가입\n"
-        "2. 로그인 → 마이페이지 → **인증키 발급**\n"
-        "3. 발급된 키를 사이드바 입력란에 붙여넣기\n\n"
-        "**또는** `.streamlit/secrets.toml` 파일에 저장:\n"
-        "```toml\n"
-        "SEOUL_API_KEY = \"발급받은_키\"\n"
-        "```\n\n"
-        "사용 API: `GetParkInfo` (공영주차장 안내정보, 5분 갱신)"
-    )
-    st.stop()
 
 
 # ─────────────────────────────────────────
@@ -388,8 +371,9 @@ if "전체 현황" in view:
 
     with col2:
         st.markdown("#### 주차장 종류 비율")
-        if "주차장 종류명" in fi.columns and fi["주차장 종류명"].notna().any():
-            vc = fi["주차장 종류명"].value_counts()
+        kind_col = next((c for c in ["주차장 종류명", "주차장 종류", "운영구분명", "운영구분"] if c in fi.columns and fi[c].notna().any()), None)
+        if kind_col:
+            vc = fi[kind_col].value_counts()
             fig2 = go.Figure(go.Pie(
                 labels=vc.index, values=vc.values, hole=0.45,
                 marker=dict(colors=["#1a6fc4", "#0f7b6c", "#d35400", "#8e44ad", "#2ecc71"]),
@@ -424,8 +408,9 @@ if "전체 현황" in view:
 
     with col4:
         st.markdown("#### 유무료 현황")
-        if "유무료구분명" in fi.columns and fi["유무료구분명"].notna().any():
-            vc2 = fi["유무료구분명"].value_counts()
+        fee_col = next((c for c in ["유무료구분명", "유무료구분"] if c in fi.columns and fi[c].notna().any()), None)
+        if fee_col:
+            vc2 = fi[fee_col].value_counts()
             fig4 = go.Figure(go.Pie(
                 labels=vc2.index, values=vc2.values, hole=0.5,
                 marker=dict(colors=["#1a6fc4", "#2ecc71"]),
@@ -437,8 +422,9 @@ if "전체 현황" in view:
             st.info("API에서 유무료 정보를 제공하지 않습니다.")
 
         st.markdown("#### 운영 구분 Top 5")
-        if "운영구분명" in fi.columns and fi["운영구분명"].notna().any():
-            for nm, c in fi["운영구분명"].value_counts().head(5).items():
+        oper_col = next((c for c in ["운영구분명", "운영구분"] if c in fi.columns and fi[c].notna().any()), None)
+        if oper_col:
+            for nm, c in fi[oper_col].value_counts().head(5).items():
                 pct = round(c / max(len(fi), 1) * 100, 1)
                 st.markdown(f"**{nm}** `{c:,}개` {pct}%")
         else:
